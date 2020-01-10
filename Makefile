@@ -2,7 +2,7 @@
 # COMPILER FLAGS
 #==================================================================================================
 
-CCFLAGS += -std=c++17 -Werror -Wall -O3 -mavx -fno-stack-protector
+CCFLAGS += -std=c++17 -Werror -Wall -O3 -mavx -fno-stack-protector -pthread
 
 #==================================================================================================
 # INSTALLATION
