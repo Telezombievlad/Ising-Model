@@ -37,10 +37,10 @@ void read_config(const char* filename)
 	if (fscanf(conf_file,        "magnetic_moment %lf\n",        &magnetic_moment) != 1)        magnetic_moment = 1.0;
 	if (fscanf(conf_file,     "saved_data_samples %zu\n",     &saved_data_samples) != 1)     saved_data_samples = 100;
 	if (fscanf(conf_file,        "burn_in_samples %zu\n",        &burn_in_samples) != 1)        burn_in_samples = 20;
-	if (fscanf(conf_file,    "mc_iters_per_sample %zu\n",    &mc_iters_per_sample) != 1)    mc_iters_per_sample = 1000000;
+	if (fscanf(conf_file,    "mc_iters_per_sample %zu\n",    &mc_iters_per_sample) != 1)    mc_iters_per_sample = 100000;
 	if (fscanf(conf_file, "iters_per_render_frame %zu\n", &iters_per_render_frame) != 1) iters_per_render_frame = 50000;
 
-	interactivity *= 1.6e-19;
+	interactivity *= 1.6e-19; // Joules
 
 	externalField.x = 0.0;
 	externalField.y = 0.0;
@@ -249,8 +249,8 @@ int main(int argc, char** argv)
 
 	printf("Computing for T=%lf H=%lf\n", oldT, oldFieldZ);
 
-	int sizeX = 1000;
-	int sizeY = 1000;
+	int sizeX = 200;
+	int sizeY = 200;
 	Lattice isingModel = Lattice(sizeX, sizeY, getInteractivity, getStateX, getStateY);
 
 	for (size_t iteration = 0, cur_saved_data = 0; iteration < burn_in_samples + saved_data_samples; ++iteration)
@@ -258,20 +258,8 @@ int main(int argc, char** argv)
 		printf("\rComputation in progress: %02.0f%%", 100.0 * cur_saved_data/saved_data_samples);
 		fflush(stdout);
 
-		auto metropolisCycle = [&](char thr)
-		{
-			isingModel.metropolisSweep(thr);
-		};
-
-		std::thread quarter0{metropolisCycle, 0};
-		std::thread quarter1{metropolisCycle, 1};
-		std::thread quarter2{metropolisCycle, 2};
-		std::thread quarter3{metropolisCycle, 3};
-
-		quarter0.join();
-		quarter1.join();
-		quarter2.join();
-		quarter3.join();
+		for (size_t iter = 0; iter < mc_iters_per_sample; ++iter)
+			isingModel.metropolisStep();
 
 		if (burn_in_samples <= iteration && cur_saved_data < saved_data_samples)
 		{
@@ -289,7 +277,7 @@ int main(int argc, char** argv)
 	// Save data triplets to file 
 	//============================
 
-	cnpy::npy_save(argv[2], data_points, {saved_data_samples, 2}, "a");
+	cnpy::npy_save(argv[2], data_points, {saved_data_samples, 2}, "w");
 	
 	delete[] data_points;
 

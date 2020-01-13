@@ -4,7 +4,12 @@
 
 enum RequestType
 {
-	
+	I_WANT_TASKS,
+	HERE_IS_YOUR_TASK,
+	TASK_DONE
 };
 
+
+
 #endif  // COMPUTING_GRID_HPP_INCLUDED
+
