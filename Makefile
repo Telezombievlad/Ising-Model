@@ -30,8 +30,9 @@ LINK_TO_CNPY_FLAGS = -L/usr/local -lcnpy -lz
 # MODEL
 #==================================================================================================
 
-MODEL_SRC = model/model.cpp
-MODEL_EXE = model/model
+MODEL_SRC   = model/model.cpp
+MODEL_EXE   = model/model
+CONFIG_FILE = model/ising-model-config.conf
 
 RESULT_FILE = res/THM.npy
 
@@ -39,10 +40,10 @@ model_compile : ${MODEL_SRC}
 	g++ ${CCFLAGS} ${MODEL_SRC} -o ${MODEL_EXE} ${LINK_TO_CNPY_FLAGS}
 
 model_compile_rendering : ${MODEL_SRC}
-	g++ -DRENDERING ${CCFLAGS} ${MODEL_SRC} -o ${MODEL_EXE} ${LINK_TO_CNPY_FLAGS}
+	g++ -DRENDERING ${CCFLAGS} ${MODEL_SRC} -o ${MODEL_EXE}
 
 run :
-	${MODEL_EXE} 0.0001 0.0 ${RESULT_FILE}
+	${MODEL_EXE} ${CONFIG_FILE} ${RESULT_FILE}
 
 #==================================================================================================
 # EXPERIMENTS

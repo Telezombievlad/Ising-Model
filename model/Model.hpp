@@ -35,9 +35,12 @@ struct Lattice
 
 	inline LatticePoint& get(int x, int y);
 
-	void metropolisStep(long double temp, Vector externalField);
-	void metropolisSweep(long double temp, Vector externalField);
-	void metropolisStepAt(long double temp, Vector externalField, int alteredX, int alteredY, int randomNum);
+	inline void metropolisStep();
+	inline void metropolisSweep(char thread);
+	void metropolisStepAt(int alteredX, int alteredY, int randomNum);
+
+	double calculateMagnetization();
+	double calculateEnergy();
 };
 
 Lattice::Lattice(int latticeSizeX, int latticeSizeY,
@@ -79,30 +82,43 @@ inline LatticePoint& Lattice::get(int x, int y)
 	return points[x * sizeY + y];
 }
 
-void Lattice::metropolisStep(long double temp, Vector externalField)
+inline void Lattice::metropolisStep()
 {
-	int randomNum = rand();
+	static std::random_device rd;
+	static std::uniform_int_distribution<int> dist{0, 100 * sizeX * sizeY};
+
+	int randomNum = dist(rd);
 
 	int alteredX = randomNum % sizeX;
 	randomNum /= sizeX;
 	int alteredY = randomNum % sizeY;
 	randomNum /= sizeY;
 
-	metropolisStepAt(temp, externalField, alteredX, alteredY, randomNum);
+	metropolisStepAt(alteredX, alteredY, randomNum);
 }
 
-void Lattice::metropolisSweep(long double temp, Vector externalField)
+inline void Lattice::metropolisSweep(char thread)
 {
-	for (int x = 0; x < sizeX; ++x)
+	static std::random_device rd;
+	static std::uniform_int_distribution<int> dist{0, 100 * sizeX * sizeY};
+
+	for (size_t iter = 0; iter < mc_iters_per_sample; ++iter)
 	{
-		for (int y = 0; y < sizeY; ++y)
-		{
-			metropolisStepAt(temp, externalField, x, y, rand());
-		}		
+		int randomNum = dist(rd);
+
+		int alteredX = randomNum % (sizeX/2);
+		randomNum /= sizeX;
+		int alteredY = randomNum % (sizeY/2);
+		randomNum /= sizeY;
+
+		if (thread & 0x01) alteredX += sizeX/2;
+		if (thread & 0x02) alteredY += sizeY/2;
+
+		metropolisStepAt(alteredX, alteredY, randomNum);
 	}
 }
-
-void Lattice::metropolisStepAt(long double temp, Vector externalField, int alteredX, int alteredY, int randomNum)
+	
+void Lattice::metropolisStepAt(int alteredX, int alteredY, int randomNum)
 {
 	static std::random_device rd;
 	static std::mt19937 gen{rd()};
@@ -110,7 +126,7 @@ void Lattice::metropolisStepAt(long double temp, Vector externalField, int alter
 
 	LatticePoint& alteredPoint = get(alteredX                                      , alteredY                                     );
 	LatticePoint  neighbourL   = get((alteredX == 0)? (sizeX - 1) : (alteredX - 1) , alteredY                                     );
-	LatticePoint  neighbourR   = get((alteredX + 1) % sizeX                          , alteredY                                     );
+	LatticePoint  neighbourR   = get((alteredX + 1) % sizeX                        , alteredY                                     );
 	LatticePoint  neighbourU   = get(alteredX                                      , (alteredY == 0)? (sizeY - 1) : (alteredY - 1));
 	LatticePoint  neighbourD   = get(alteredX                                      , (alteredY + 1) % sizeY                       );
 
@@ -143,16 +159,53 @@ void Lattice::metropolisStepAt(long double temp, Vector externalField, int alter
 		return;
 	}
 
-	double acceptanceRatio = exp((curEnergy - nxtEnergy) / temp);
+	double acceptanceRatio = exp((curEnergy - nxtEnergy) / temperature);
 	double toss = distribution(gen);
 
 	if (toss < acceptanceRatio)
 	{
-		// printf("curE = %5.2lf, nxtE = %5.2lf, ratio = %5.2lf, toss = %5.2lf\n", curEnergy, nxtEnergy, acceptanceRatio, toss);
-
 		alteredPoint.stateX = newStateX;
 		alteredPoint.stateY = newStateY;
 	}
+}
+
+double Lattice::calculateMagnetization()
+{
+	double magnetization = 0.0;
+
+	for (int x = 0; x < sizeX; ++x) {
+	for (int y = 0; y < sizeY; ++y) {
+		LatticePoint curPoint = get(x, y);
+		Vector spin = stateGraph.get(curPoint.stateX, curPoint.stateY);
+
+		magnetization += spin.z;
+	}}
+	
+	magnetization /= sizeX*sizeY;
+
+	return magnetization;
+}
+
+double Lattice::calculateEnergy()
+{
+	double energy = 0.0;
+
+	for (int x = 0; x < sizeX; ++x) {
+	for (int y = 0; y < sizeY; ++y) {
+		LatticePoint& cur        = get(              x,               y);
+		LatticePoint& neighbourR = get((x + 1) % sizeX,               y);
+		LatticePoint& neighbourD = get(              x, (y + 1) % sizeY);
+
+		Vector spin  = stateGraph.get(       cur.stateX,        cur.stateY);
+		Vector spinR = stateGraph.get(neighbourR.stateX, neighbourR.stateY);
+		Vector spinD = stateGraph.get(neighbourD.stateX, neighbourD.stateY);		
+
+		energy -= spin.scalar(externalField) +
+		          spin.scalar(spinR) * cur.interactivityR +
+		          spin.scalar(spinD) * cur.interactivityD;
+	}}
+
+	return energy;
 }
 
 #endif  // POTTS_MODEL_MODEL_HPP_INCLUDED

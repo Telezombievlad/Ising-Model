@@ -1,21 +1,56 @@
-// No Copyright. Vladislav Aleinik 2019
-
-#include "Model.hpp"
+// ========================================================================
+// The Ising Model                                                         
+// No Copyright. Vladislav Aleinik 2019                                    
+// ========================================================================
 
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
-#include <unistd.h>
-#include <time.h>
-#include <fcntl.h>
+// ========================================================================
+// Configuration File Work                                                
+// ========================================================================
 
-#include <sys/mman.h>
-#include <sys/ioctl.h>
-#include <linux/fb.h>
-#include <linux/kd.h>
+#include "Vector.hpp"
 
-#include "vendor/cnpy/cnpy.h"
+double temperature;
+Vector externalField;
+double magnetic_permiability;
+double interactivity;
+size_t saved_data_samples;
+size_t burn_in_samples;
+size_t mc_iters_per_sample;
+size_t iters_per_render_frame;
+
+void read_config(const char* filename)
+{
+	FILE* conf_file = std::fopen(filename, "r");
+	if (conf_file == NULL)
+	{
+		fprintf(stderr, "[ISING_MODEL] Unable to open config file\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (fscanf(conf_file,            "temperature %lf\n",            &temperature) != 1)            temperature = 100.0;
+	if (fscanf(conf_file,                  "field %lf\n",        &externalField.z) != 1)        externalField.z = 0.0;
+	if (fscanf(conf_file,  "magnetic_permiability %lf\n",  &magnetic_permiability) != 1)  magnetic_permiability = 1.0;
+	if (fscanf(conf_file,          "interactivity %lf\n",          &interactivity) != 1)          interactivity = 1.0;
+	if (fscanf(conf_file,     "saved_data_samples %zu\n",     &saved_data_samples) != 1)     saved_data_samples = 100;
+	if (fscanf(conf_file,        "burn_in_samples %zu\n",        &burn_in_samples) != 1)        burn_in_samples = 20;
+	if (fscanf(conf_file,    "mc_iters_per_sample %zu\n",    &mc_iters_per_sample) != 1)    mc_iters_per_sample = 1000000;
+	if (fscanf(conf_file, "iters_per_render_frame %zu\n", &iters_per_render_frame) != 1) iters_per_render_frame = 50000;
+
+	externalField.x = 0.0;
+	externalField.y = 0.0;
+
+	fclose(conf_file);
+}
+
+#include "Model.hpp"
+
+// ========================================================================
+// Initial Spin States                                                     
+// ========================================================================
 
 long double getInteractivity(int x, int y)
 {
@@ -23,7 +58,7 @@ long double getInteractivity(int x, int y)
 	static std::mt19937 gen{rd()};
 	static std::uniform_real_distribution<double> distribution(-1.0, 1.0);
 
-	return 1.0;
+	return interactivity;
 }
 
 int getStateX(int x, int y)
@@ -36,28 +71,37 @@ int getStateY(int x, int y)
 	return rand() % STATE_GRAPH_SIZE_Y;
 }
 
+// ========================================================================
+#ifdef RENDERING
+// ========================================================================
+
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <linux/fb.h>
+#include <linux/kd.h>
+
 int main(int argc, char** argv)
 {
-	if (argc != 4)
+	if (argc != 3)
 	{
-		fprintf(stderr, "[ISING-MODEL] Expected input: model <temperature> <field> <filename>\n");
+		fprintf(stderr, "[ISING-MODEL] Expected input: model <config file> <output file>\n");
 		exit(EXIT_FAILURE);
 	}
+	
+	//=========================
+	// Read Configuration File 
+	//=========================
+	
+	read_config(argv[1]);
 
-	//=================
-	// Parse arguments 
-	//=================
+	// Fixing units:
 
-	double temperature = strtof(argv[1], NULL);
-	if (temperature <= 0.0f)
-	{
-		fprintf(stderr, "[ISING-MODEL] Invalid temperature value: %f\n", temperature);
-		exit(EXIT_FAILURE);
-	}
+	externalField.z *= magnetic_permiability;
+	temperature     *= 1.38e-23;
 
-	double fieldZ = strtof(argv[2], NULL);
-
-#ifdef RENDERING
 	//=================================
 	// Open frame buffer for rendering 
 	//=================================
@@ -95,7 +139,7 @@ int main(int argc, char** argv)
 	}
 	
 	//===================================================
-	// Parse frame buffer info (used only for rendering)
+	// Parse frame buffer info (used only for rendering) 
 	//===================================================
 
 	size_t        fb_size         = finf.line_length * vinf.yres;
@@ -106,19 +150,92 @@ int main(int argc, char** argv)
 	uint_fast16_t offset_blue     = vinf.blue.offset  / 8;
 	size_t        sizeX           = vinf.xres;
 	size_t        sizeY           = vinf.yres;
+
+	//==============
+	// Calculations 
+	//==============
+
+	Lattice isingModel = Lattice(sizeX/8, sizeY/8, getInteractivity, getStateX, getStateY);
+
+	while (true)
+	{
+		for (size_t i = 0; i < iters_per_render_frame; ++i)
+		{
+			isingModel.metropolisStep();
+		}
+
+		for (uint_fast16_t x = 0; x < sizeX/8; ++x)
+		{
+			for (uint_fast16_t y = 0; y < sizeY/8; ++y)
+			{
+				LatticePoint curPoint = isingModel.get(x, y);
+				Vector spin = isingModel.stateGraph.get(curPoint.stateX, curPoint.stateY);
+
+				for (size_t dx = 0; dx < 8; ++dx) {
+				for (size_t dy = 0; dy < 8; ++dy) {
+					uint_fast16_t pix_offset = (8*x+dx) * bytes_per_pixel +
+					                           (8*y+dy) * bytes_per_line;
+					frame_buffer[pix_offset + offset_red  ] = (1.0 + spin.x) * 127;;
+					frame_buffer[pix_offset + offset_green] = (1.0 + spin.z) * 127;
+					frame_buffer[pix_offset + offset_blue ] = (1.0 + spin.y) * 127;;
+				}}
+			}
+		}
+	}
+
+	//======================
+	// Deallocate resources 
+	//======================
+
+	if (munmap(frame_buffer, fb_size) == -1)
+	{
+		fprintf(stderr, "[ISING-MODEL] Expected input: model <config file> <output file>\n");
+		exit(EXIT_FAILURE);
+	}
+
+	close(fb0_fd);
+
+	return EXIT_SUCCESS;
+}
+
+// ========================================================================
 #else
-	size_t sizeX = 2000;
-	size_t sizeY = 2000;
-#endif 
+// ========================================================================
+
+#include <thread>
+#include <functional>
+#include <vector>
+
+#include "vendor/cnpy/cnpy.h"
+
+int main(int argc, char** argv)
+{
+	if (argc != 3)
+	{
+		fprintf(stderr, "[ISING-MODEL] Expected input: model <temperature> <field> <filename>\n");
+		exit(EXIT_FAILURE);
+	}
 	
+	//=========================
+	// Read Configuration File 
+	//=========================
+
+	read_config(argv[1]);
+	
+	// Fixing units:
+
+	double oldFieldZ = externalField.z;
+	double oldT      = temperature;
+
+	externalField.z *= magnetic_permiability;
+	temperature *= 1.38e-23;
+
 	//===================================
 	// Allocate buffer for data triplets 
 	//===================================
 
-	size_t saved_data_size = 100;
-	size_t save_data_every = 10;
-	double* data_triplets = (double*) calloc(3 * saved_data_size, sizeof(*data_triplets));
-	if (data_triplets == NULL)
+	double* data_points = (double*) calloc(2 * saved_data_samples, sizeof(*data_points));
+	if (data_points == NULL)
 	{
 		fprintf(stderr, "[ISING-MODEL] Unable to allocate array for saved data!\n");
 		exit(EXIT_FAILURE);
@@ -128,70 +245,53 @@ int main(int argc, char** argv)
 	// Calculations 
 	//==============
 
-	Lattice isingModel = Lattice(sizeX/2, sizeY/2, getInteractivity, getStateX, getStateY);
+	printf("Computing for T=%lf H=%lf\n", oldT, oldFieldZ);
 
-	Vector field{0.0, 0.0, fieldZ};
-	for (size_t iteration = 0, cur_saved_data = 0;
-		 iteration < 100 + save_data_every * saved_data_size;
-		 ++iteration)
+	int sizeX = 1000;
+	int sizeY = 1000;
+	Lattice isingModel = Lattice(sizeX, sizeY, getInteractivity, getStateX, getStateY);
+
+	for (size_t iteration = 0, cur_saved_data = 0; iteration < burn_in_samples + saved_data_samples; ++iteration)
 	{
-		for (int i = 0; i < 100000; ++i)
+		printf("\rComputation in progress: %02.0f%%", 100.0 * cur_saved_data/saved_data_samples);
+		fflush(stdout);
+
+		auto metropolisCycle = [&](char thr)
 		{
-			isingModel.metropolisStep(temperature, field);
+			isingModel.metropolisSweep(thr);
+		};
+
+		std::thread quarter0{metropolisCycle, 0};
+		std::thread quarter1{metropolisCycle, 1};
+		std::thread quarter2{metropolisCycle, 2};
+		std::thread quarter3{metropolisCycle, 3};
+
+		quarter0.join();
+		quarter1.join();
+		quarter2.join();
+		quarter3.join();
+
+		if (burn_in_samples <= iteration && cur_saved_data < saved_data_samples)
+		{
+			data_points[2 * cur_saved_data + 0] = isingModel.calculateMagnetization();
+			data_points[2 * cur_saved_data + 1] = isingModel.calculateEnergy();			
+
+			++cur_saved_data;
 		}
-
-		double magnetization = 0.0;
-		for (uint_fast16_t x = 0; x < sizeX/2; ++x)
-		{
-			for (uint_fast16_t y = 0; y < sizeY/2; ++y)
-			{
-				LatticePoint curPoint = isingModel.get(x, y);
-				Vector spin = isingModel.stateGraph.get(curPoint.stateX, curPoint.stateY);
-
-				magnetization += spin.z;
-
-			#ifdef RENDERING
-				for (size_t dx = 0; dx < 2; ++dx) {
-				for (size_t dy = 0; dy < 2; ++dy) {
-					uint_fast16_t pix_offset = (2*x+dx) * bytes_per_pixel +
-					                           (2*y+dy) * bytes_per_line;
-					frame_buffer[pix_offset + offset_red  ] = 0;
-					frame_buffer[pix_offset + offset_green] = (1.0 + spin.z) * 127;
-					frame_buffer[pix_offset + offset_blue ] = 32;
-				}}
-			#endif
-			}
-		}
-		
-		magnetization /= sizeX*sizeY/4;
-
-		if (100 <= iteration && iteration % save_data_every == 0 && cur_saved_data < saved_data_size)
-		{
-			data_triplets[3 * cur_saved_data + 0] = temperature;
-			data_triplets[3 * cur_saved_data + 1] = fieldZ;
-			data_triplets[3 * cur_saved_data + 2] = magnetization;
-		}	
 	}
+	
+	printf("\rComputation in progress: %02.0f%%", 100.0);
+	printf("\nComputation completed!\n");
 
 	//============================
 	// Save data triplets to file 
 	//============================
 
-	cnpy::npy_save(argv[3], data_triplets, {saved_data_size, 3}, "a");
-
-	//======================
-	// Deallocate resources 
-	//======================
-
-#ifdef RENDERING
-	if (munmap(frame_buffer, fb_size) == -1)
-	{
-		fprintf(stderr, "[ISING-MODEL] Unable to unmap frame buffer from address space\n");
-		exit(EXIT_FAILURE);
-	}
-
-	close(fb0_fd);
-#endif
+	cnpy::npy_save(argv[2], data_points, {saved_data_samples, 2}, "a");
+	
+	delete[] data_points;
 
 	return EXIT_SUCCESS;
 }
+
+#endif
