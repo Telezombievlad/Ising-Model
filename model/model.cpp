@@ -15,8 +15,8 @@
 
 double temperature;
 Vector externalField;
-double magnetic_permiability;
 double interactivity;
+double magnetic_moment;
 size_t saved_data_samples;
 size_t burn_in_samples;
 size_t mc_iters_per_sample;
@@ -33,12 +33,14 @@ void read_config(const char* filename)
 
 	if (fscanf(conf_file,            "temperature %lf\n",            &temperature) != 1)            temperature = 100.0;
 	if (fscanf(conf_file,                  "field %lf\n",        &externalField.z) != 1)        externalField.z = 0.0;
-	if (fscanf(conf_file,  "magnetic_permiability %lf\n",  &magnetic_permiability) != 1)  magnetic_permiability = 1.0;
 	if (fscanf(conf_file,          "interactivity %lf\n",          &interactivity) != 1)          interactivity = 1.0;
+	if (fscanf(conf_file,        "magnetic_moment %lf\n",        &magnetic_moment) != 1)        magnetic_moment = 1.0;
 	if (fscanf(conf_file,     "saved_data_samples %zu\n",     &saved_data_samples) != 1)     saved_data_samples = 100;
 	if (fscanf(conf_file,        "burn_in_samples %zu\n",        &burn_in_samples) != 1)        burn_in_samples = 20;
 	if (fscanf(conf_file,    "mc_iters_per_sample %zu\n",    &mc_iters_per_sample) != 1)    mc_iters_per_sample = 1000000;
 	if (fscanf(conf_file, "iters_per_render_frame %zu\n", &iters_per_render_frame) != 1) iters_per_render_frame = 50000;
+
+	interactivity *= 1.6e-19;
 
 	externalField.x = 0.0;
 	externalField.y = 0.0;
@@ -99,7 +101,7 @@ int main(int argc, char** argv)
 
 	// Fixing units:
 
-	externalField.z *= magnetic_permiability;
+	externalField.z *= magnetic_moment;
 	temperature     *= 1.38e-23;
 
 	//=================================
@@ -227,7 +229,7 @@ int main(int argc, char** argv)
 	double oldFieldZ = externalField.z;
 	double oldT      = temperature;
 
-	externalField.z *= magnetic_permiability;
+	externalField.z *= magnetic_moment;
 	temperature *= 1.38e-23;
 
 	//===================================
@@ -273,8 +275,8 @@ int main(int argc, char** argv)
 
 		if (burn_in_samples <= iteration && cur_saved_data < saved_data_samples)
 		{
-			data_points[2 * cur_saved_data + 0] = isingModel.calculateMagnetization();
-			data_points[2 * cur_saved_data + 1] = isingModel.calculateEnergy();			
+			data_points[2 * cur_saved_data + 0] = magnetic_moment * isingModel.calculateMagnetization();
+			data_points[2 * cur_saved_data + 1] = isingModel.calculateEnergy();
 
 			++cur_saved_data;
 		}
