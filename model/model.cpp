@@ -41,6 +41,9 @@ void read_config(const char* filename)
 	if (fscanf(conf_file, "iters_per_render_frame %zu\n", &iters_per_render_frame) != 1) iters_per_render_frame = 50000;
 
 	interactivity *= 1.6e-19; // Joules
+	temperature *= 1.38e-23; // kT
+
+	externalField.z *= 0.01 * magnetic_moment;
 
 	externalField.x = 0.0;
 	externalField.y = 0.0;
@@ -54,21 +57,12 @@ void read_config(const char* filename)
 // Initial Spin States                                                     
 // ========================================================================
 
-long double getInteractivity(int x, int y)
-{
-	static std::random_device rd;
-	static std::mt19937 gen{rd()};
-	static std::uniform_real_distribution<double> distribution(-1.0, 1.0);
-
-	return interactivity;
-}
-
-int getStateX(int x, int y)
+int getStateX(int x, int y, int z)
 {
 	return rand() % STATE_GRAPH_SIZE_X;
 }
 
-int getStateY(int x, int y)
+int getStateY(int x, int y, int z)
 {
 	return rand() % STATE_GRAPH_SIZE_Y;
 }
@@ -84,6 +78,7 @@ int getStateY(int x, int y)
 #include <sys/ioctl.h>
 #include <linux/fb.h>
 #include <linux/kd.h>
+#include <time.h>
 
 int main(int argc, char** argv)
 {
@@ -101,8 +96,8 @@ int main(int argc, char** argv)
 
 	// Fixing units:
 
-	externalField.z *= magnetic_moment;
-	temperature     *= 1.38e-23;
+	double oldFieldZ = 100.0 * externalField.z / magnetic_moment;
+	double oldT      = temperature / 1.38e-23;
 
 	//=================================
 	// Open frame buffer for rendering 
@@ -153,14 +148,63 @@ int main(int argc, char** argv)
 	size_t        sizeX           = vinf.xres;
 	size_t        sizeY           = vinf.yres;
 
+	//==========================
+	// Configure input settings 
+	//==========================
+
+	if (fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK|O_RDONLY) == -1)
+	{
+		fprintf(stderr, "[ISING-MODEL] Unable to configure input\n");
+		exit(EXIT_FAILURE);
+	}
+
 	//==============
 	// Calculations 
 	//==============
 
-	Lattice isingModel = Lattice(sizeX/8, sizeY/8, getInteractivity, getStateX, getStateY);
+	size_t sizeZ = 5;
+	size_t curZ  = 0;
 
-	while (true)
+	Lattice isingModel = Lattice(sizeX/8, sizeY/8, sizeZ, getStateX, getStateY);
+
+	double saved_magnetization = 0.0;
+	for (size_t iter = 0; true; iter = (iter + 1) % 10)
 	{
+		// User Interaction:
+		char curCmd;
+		for (int bytes_read = read(STDIN_FILENO, &curCmd, 1);
+			bytes_read != 0 && curCmd != '\n';
+			bytes_read = read(STDIN_FILENO, &curCmd, 1))
+		{
+			switch (curCmd)
+			{
+				case 'w':
+				{
+					oldT += 2.0;
+					temperature = 1.38e-23 * oldT;
+					break;
+				}
+				case 's':
+				{
+					oldT -= 2.0;
+					temperature = 1.38e-23 * oldT;
+					break;
+				}
+				case 'a':
+				{
+					oldFieldZ -= 0.1;
+					externalField.z = oldFieldZ * 0.01 * magnetic_moment;
+					break;
+				}
+				case 'd':
+				{
+					oldFieldZ += 0.1;
+					externalField.z = oldFieldZ * 0.01 * magnetic_moment;
+					break;
+				}
+			}
+		}
+
 		for (size_t i = 0; i < iters_per_render_frame; ++i)
 		{
 			isingModel.metropolisStep();
@@ -168,9 +212,9 @@ int main(int argc, char** argv)
 
 		for (uint_fast16_t x = 0; x < sizeX/8; ++x)
 		{
-			for (uint_fast16_t y = 0; y < sizeY/8; ++y)
+			for (uint_fast16_t y = 0; y < sizeY/8-3; ++y)
 			{
-				LatticePoint curPoint = isingModel.get(x, y);
+				LatticePoint curPoint = isingModel.get(x, y, curZ);
 				Vector spin = isingModel.stateGraph.get(curPoint.stateX, curPoint.stateY);
 
 				for (size_t dx = 0; dx < 8; ++dx) {
@@ -183,6 +227,11 @@ int main(int argc, char** argv)
 				}}
 			}
 		}
+
+		if (iter == 0) saved_magnetization = isingModel.calculateMagnetization();
+
+		printf("T = %0.03lf, H = %0.03lf, M = %0.03lf\r", oldT, oldFieldZ, saved_magnetization);
+		fflush(stdout);
 	}
 
 	//======================
@@ -226,11 +275,8 @@ int main(int argc, char** argv)
 	
 	// Fixing units:
 
-	double oldFieldZ = externalField.z;
-	double oldT      = temperature;
-
-	externalField.z *= magnetic_moment;
-	temperature *= 1.38e-23;
+	double oldFieldZ = 100.0 * externalField.z / magnetic_moment;
+	double oldT      = temperature / 1.38e-23;
 
 	//===================================
 	// Allocate buffer for data triplets 
@@ -249,9 +295,10 @@ int main(int argc, char** argv)
 
 	printf("Computing for T=%lf H=%lf\n", oldT, oldFieldZ);
 
-	int sizeX = 200;
-	int sizeY = 200;
-	Lattice isingModel = Lattice(sizeX, sizeY, getInteractivity, getStateX, getStateY);
+	int sizeX = 30;
+	int sizeY = 30;
+	int sizeZ = 30;
+	Lattice isingModel = Lattice(sizeX, sizeY, sizeZ, getStateX, getStateY);
 
 	for (size_t iteration = 0, cur_saved_data = 0; iteration < burn_in_samples + saved_data_samples; ++iteration)
 	{
